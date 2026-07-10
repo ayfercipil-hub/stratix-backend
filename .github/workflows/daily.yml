@@ -18,7 +18,7 @@ jobs:
         run: pip install -r pipeline/requirements.txt
       - name: Gunluk analiz isini calistir
         env:
-          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+          FOOTBALLDATA_KEY: ${{ secrets.FOOTBALLDATA_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         working-directory: pipeline
