@@ -1,0 +1,25 @@
+name: STRATIX Gunluk Analiz
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # her gun 05:00 UTC (Isvicre 06:00/07:00)
+  workflow_dispatch: {}    # elle calistirma butonu
+
+jobs:
+  analiz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Bagimliliklari kur
+        run: pip install -r pipeline/requirements.txt
+      - name: Gunluk analiz isini calistir
+        env:
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        working-directory: pipeline
+        run: python daily_job.py
