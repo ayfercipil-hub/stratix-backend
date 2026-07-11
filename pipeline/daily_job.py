@@ -79,7 +79,8 @@ LEAGUE_STRENGTH = {
     "AUT": -0.45, "SWZ": -0.45, "RUS": -0.40,
     "NOR": -0.55, "SWE": -0.60, "ROU": -0.60, "IRL": -0.70, "FIN": -0.70,
 }
-FD_BASE = "https://www.football-data.co.uk/mmz4281"
+FD_ROOT = "https://www.football-data.co.uk"
+FD_BASE = f"{FD_ROOT}/mmz4281"
 FDO_BASE = "https://api.football-data.org/v4"
 FDO_DELAY = 6.5                     # ucretsiz katman: dakikada 10 istek
 HORIZON_DAYS = 7
@@ -284,13 +285,15 @@ def download_history(tmpdir="fd_data"):
 
     # Grup B: Ekstra semasi liglar (tek dosya, tum sezonlar)
     for code in LEAGUES_EXTRA_SCHEMA.keys():
-        url = f"{FD_BASE}/new/{code}.csv"
+        url = f"{FD_ROOT}/new/{code}.csv"
         p = os.path.join(tmpdir, f"{code}_extra.csv")
         try:
             r = requests.get(url, timeout=30)
             if r.status_code == 200 and len(r.content) > 1000:
                 open(p, "wb").write(r.content)
                 paths.append(p)
+            else:
+                print(f"UYARI: {url} beklenen veriyi dondurmedi (HTTP {r.status_code}, {len(r.content)} bayt)")
         except requests.RequestException as e:
             print(f"UYARI: {url} indirilemedi: {e}")
 
@@ -355,7 +358,7 @@ def download_fixtures_main_schema(tmpdir="fd_data"):
     Div, Date, Time, HomeTeam, AwayTeam, ... (artı oran kolonları)
     Div in {B1,SC0,G1,T1} olanları döndür."""
     os.makedirs(tmpdir, exist_ok=True)
-    url = f"{FD_BASE}/fixtures.csv"
+    url = f"{FD_ROOT}/fixtures.csv"
     p = os.path.join(tmpdir, "fixtures_main.csv")
     try:
         r = requests.get(url, timeout=30)
@@ -384,7 +387,7 @@ def download_fixtures_extra_schema(tmpdir="fd_data"):
     Country, League, Date, Time, Home, Away, ... (artı oran kolonları)
     Country kodu maplanır: Switzerland->SWZ, Austria->AUT, ... vb."""
     os.makedirs(tmpdir, exist_ok=True)
-    url = f"{FD_BASE}/new_league_fixtures.csv"
+    url = f"{FD_ROOT}/new_league_fixtures.csv"
     p = os.path.join(tmpdir, "fixtures_extra.csv")
     country_map = {v: k for k, v in LEAGUES_EXTRA_SCHEMA.items()}
     try:
