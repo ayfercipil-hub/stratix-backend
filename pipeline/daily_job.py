@@ -5,7 +5,9 @@ STRATIX - Gunluk Analiz Isi (Asama 1)
 Her sabah GitHub Actions uzerinde calisir:
   1. football-data.co.uk'den guncel tarihi veriyi indirir, modeli egitir
   2. football-data.org'dan onumuzdeki 7 gunun fikstürünü ceker
-  3. Her mac icin olasiliklari hesaplar (Dixon-Coles v2)
+     (8 lig + Sampiyonlar Ligi + milli takim turnuvalari)
+  3. Her mac icin olasiliklari hesaplar (Dixon-Coles v2; turnuva maclari icin
+     lig-guc duzeltmeli capraz-lig surumu; milli takim maclari sadece analiz)
   4. (Varsa) Gemini API ile 3 maddelik gerekce metni uretir
   5. Sonuclari Firestore'a yazar (DEGISTIRILEMEZ tahmin gunlugu mantigiyla:
      ayni mac icin kayit varsa uzerine yazilmaz, 'guncelleme' ayri belge olur)
@@ -27,7 +29,8 @@ from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 
-from stratix_core import load_matches, DixonColes, EDGE_THRESHOLD
+from stratix_core import (load_matches, DixonColes, EDGE_THRESHOLD,
+                          predict_cross_league)
 
 # ------------------------------------------------------------------ ayarlar
 SEASONS_BACK = 4                    # model icin kac sezon geriye gidilecek
@@ -37,6 +40,21 @@ LEAGUES = {                         # football-data.org lig kodu -> football-dat
     "PD":  "SP1",   # La Liga
     "SA":  "I1",    # Serie A
     "FL1": "F1",    # Ligue 1
+    "DED": "N1",    # Eredivisie (Hollanda)     - ucretsiz katmanda
+    "PPL": "P1",    # Primeira Liga (Portekiz)  - ucretsiz katmanda
+    "ELC": "E1",    # Championship (Ingiltere 2)- ucretsiz katmanda
+}
+
+# Capraz-lig turnuvalari (takimlar farkli liglerden gelir)
+CROSS_COMPS = ["CL"]                # Sampiyonlar Ligi (ucretsiz katmanda)
+# Sadece analiz/anlati (sayisal model yok): milli takim turnuvalari
+ANALYSIS_COMPS = ["WC", "EC"]       # Dunya Kupasi, Avrupa Sampiyonasi
+
+# Lig guc duzeltmesi (log-gol olcegi; referans: Premier League = 0).
+# Kaba baslangic degerleri; CL sonuclari biriktikce elle guncellenebilir.
+LEAGUE_STRENGTH = {
+    "E0": 0.00, "SP1": -0.05, "D1": -0.08, "I1": -0.08,
+    "F1": -0.15, "P1": -0.22, "N1": -0.25, "E1": -0.55,
 }
 FD_BASE = "https://www.football-data.co.uk/mmz4281"
 FDO_BASE = "https://api.football-data.org/v4"
@@ -93,6 +111,65 @@ TEAM_MAP = {
     "Stade Rennais": "Rennes", "Rennes": "Rennes",
     "RC Strasbourg Alsace": "Strasbourg", "Strasbourg": "Strasbourg",
     "Le Havre AC": "Le Havre", "Le Havre": "Le Havre",
+    # --- Eredivisie (N1)
+    "PSV Eindhoven": "PSV Eindhoven", "PSV": "PSV Eindhoven",
+    "AFC Ajax": "Ajax", "Ajax": "Ajax",
+    "Feyenoord Rotterdam": "Feyenoord", "Feyenoord": "Feyenoord",
+    "AZ Alkmaar": "AZ Alkmaar", "AZ": "AZ Alkmaar",
+    "FC Twente '65": "Twente", "Twente": "Twente",
+    "FC Utrecht": "Utrecht", "Utrecht": "Utrecht",
+    "SC Heerenveen": "Heerenveen", "Heerenveen": "Heerenveen",
+    "NEC Nijmegen": "Nijmegen", "NEC": "Nijmegen",
+    "Go Ahead Eagles": "Go Ahead Eagles",
+    "Fortuna Sittard": "For Sittard", "Sparta Rotterdam": "Sparta Rotterdam",
+    "PEC Zwolle": "Zwolle", "Zwolle": "Zwolle",
+    "Almere City FC": "Almere City", "RKC Waalwijk": "Waalwijk",
+    "FC Groningen": "Groningen", "Groningen": "Groningen",
+    "Willem II Tilburg": "Willem II", "Willem II": "Willem II",
+    "Heracles Almelo": "Heracles", "Heracles": "Heracles",
+    # --- Primeira Liga (P1)
+    "Sporting CP": "Sp Lisbon", "Sporting Lisbon": "Sp Lisbon",
+    "Sporting": "Sp Lisbon",
+    "SL Benfica": "Benfica", "Benfica": "Benfica",
+    "FC Porto": "Porto", "Porto": "Porto",
+    "SC Braga": "Sp Braga", "Braga": "Sp Braga",
+    "Vitória SC": "Guimaraes", "Vitoria Guimaraes": "Guimaraes",
+    "Vitória de Guimarães": "Guimaraes",
+    "Boavista FC": "Boavista", "Boavista": "Boavista",
+    "Casa Pia AC": "Casa Pia", "Casa Pia": "Casa Pia",
+    "GD Estoril Praia": "Estoril", "Estoril": "Estoril",
+    "FC Famalicão": "Famalicao", "Famalicão": "Famalicao",
+    "Gil Vicente FC": "Gil Vicente", "Gil Vicente": "Gil Vicente",
+    "Moreirense FC": "Moreirense", "Moreirense": "Moreirense",
+    "CD Nacional": "Nacional", "Nacional": "Nacional",
+    "Rio Ave FC": "Rio Ave", "Rio Ave": "Rio Ave",
+    "CD Santa Clara": "Santa Clara", "Santa Clara": "Santa Clara",
+    "FC Arouca": "Arouca", "Arouca": "Arouca",
+    "AVS Futebol SAD": "AVS", "Estrela da Amadora": "Estrela",
+    "CF Estrela da Amadora": "Estrela",
+    # --- Championship (E1)
+    "West Bromwich Albion": "West Brom", "West Brom": "West Brom",
+    "Queens Park Rangers": "QPR", "QPR": "QPR",
+    "Sheffield Wednesday": "Sheffield Weds", "Sheffield Wed": "Sheffield Weds",
+    "Preston North End": "Preston", "Preston": "Preston",
+    "Blackburn Rovers": "Blackburn", "Blackburn": "Blackburn",
+    "Bristol City": "Bristol City",
+    "Coventry City": "Coventry", "Coventry": "Coventry",
+    "Derby County": "Derby", "Derby": "Derby",
+    "Hull City": "Hull", "Hull": "Hull",
+    "Luton Town": "Luton", "Luton": "Luton",
+    "Middlesbrough FC": "Middlesbrough", "Middlesbrough": "Middlesbrough",
+    "Millwall FC": "Millwall", "Millwall": "Millwall",
+    "Norwich City": "Norwich", "Norwich": "Norwich",
+    "Oxford United": "Oxford", "Oxford Utd": "Oxford",
+    "Plymouth Argyle": "Plymouth", "Plymouth": "Plymouth",
+    "Portsmouth FC": "Portsmouth", "Portsmouth": "Portsmouth",
+    "Stoke City": "Stoke", "Stoke": "Stoke",
+    "Swansea City": "Swansea", "Swansea": "Swansea",
+    "Watford FC": "Watford", "Watford": "Watford",
+    "Cardiff City": "Cardiff", "Cardiff": "Cardiff",
+    "Burnley FC": "Burnley", "Burnley": "Burnley",
+    "Sunderland AFC": "Sunderland", "Sunderland": "Sunderland",
 }
 
 # ad normallestirme: "FC", "AFC", "CF", "SSC" gibi ekleri temizle
@@ -180,6 +257,37 @@ Mac: {home} - {away} ({lig})
 Model ciktisi: Ev kazanma %{ph:.0f}, Beraberlik %{pd:.0f}, Deplasman %{pa:.0f},
 2.5 Ust %{po:.0f}. Beklenen goller: {lam:.2f} - {mu:.2f}.
 Ev sahibi dinlenme: {rest_h:.0f} gun, deplasman: {rest_a:.0f} gun."""
+
+
+ANALIZ_PROMPT = """Sen STRATIX adli futbol istatistik uygulamasinin analiz yazarisin.
+Bu mac icin ELIMIZDE SAYISAL MODEL TAHMINI YOK; kendi olasilik uydurma,
+yuzde/oran verme, bahis tesvik etme. 'kesin', 'garanti' gibi kelimeler kullanma.
+Gorevin: asagidaki turnuva maci icin 3 maddelik kisa, notr ve bilgilendirici
+bir on-analiz yazmak (takimlarin genel profili, turnuva baglami, dikkat
+cekici noktalar). Her madde tek cumle olsun. Turkce yaz.
+
+Turnuva: {lig}
+Mac: {home} - {away}
+Tarih (UTC): {kickoff}"""
+
+
+def analiz_uret(home, away, lig, kickoff, api_key):
+    """Sayisal tahmin olmayan maclar icin Gemini on-analizi (hata olursa bos)."""
+    if not api_key:
+        return ""
+    prompt = ANALIZ_PROMPT.format(home=home, away=away, lig=lig, kickoff=kickoff)
+    try:
+        r = requests.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-2.0-flash:generateContent",
+            params={"key": api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=30)
+        r.raise_for_status()
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        print("Analiz uretilemedi:", e)
+        return ""
 
 
 def gerekce_uret(rec, api_key):
@@ -293,6 +401,102 @@ def main():
                 if abs(old.get("pH", 0) - rec["pH"]) > 0.03:
                     doc.collection("updates").add(rec)
     print(f"{n_written} yeni tahmin yazildi, {n_skipped} mac atlandi.")
+
+    # --- 2b) capraz-lig turnuvalari (Sampiyonlar Ligi): lig-guc duzeltmeli tahmin
+    def find_team(src_name):
+        """Takimi tum lig modellerinde arar -> (lig_kodu, fd_adi) veya None."""
+        for code_, m_ in models.items():
+            t_ = match_team(src_name, set(m_.teams))
+            if t_:
+                return code_, t_
+        return None
+
+    n_cl = n_cl_skip = 0
+    for comp in CROSS_COMPS:
+        data = fdo_get(f"/competitions/{comp}/matches", {
+            "dateFrom": str(today.date()),
+            "dateTo": str((today + pd.Timedelta(days=HORIZON_DAYS)).date())},
+            fdo_key)
+        for fx in data.get("matches", []):
+            if fx.get("status") in ("FINISHED", "POSTPONED", "CANCELLED"):
+                continue
+            fid = fx["id"]
+            h_src = fx["homeTeam"].get("shortName") or fx["homeTeam"]["name"]
+            a_src = fx["awayTeam"].get("shortName") or fx["awayTeam"]["name"]
+            fh, fa = find_team(h_src), find_team(a_src)
+            if not fh or not fa:
+                print(f"{comp}: Eslesmedi, atlandi: {h_src} / {a_src}")
+                n_cl_skip += 1
+                continue
+            (div_h, h), (div_a, a) = fh, fa
+            sdiff = LEAGUE_STRENGTH.get(div_h, -0.2) - LEAGUE_STRENGTH.get(div_a, -0.2)
+            rh = (today - rest_info[div_h].get(h, today - pd.Timedelta(days=7))).days
+            ra = (today - rest_info[div_a].get(a, today - pd.Timedelta(days=7))).days
+            pr = predict_cross_league(models[div_h], h, models[div_a], a,
+                                      strength_diff=sdiff, rest_h=rh, rest_a=ra)
+            if pr is None:
+                n_cl_skip += 1
+                continue
+            rec = {
+                "fixture_id": fid, "league_fd": f"{div_h}-{div_a}",
+                "league_comp": comp, "competition": comp,
+                "home": h, "away": a, "home_src": h_src, "away_src": a_src,
+                "kickoff": fx["utcDate"],
+                "pH": round(float(pr["pH"]), 4), "pD": round(float(pr["pD"]), 4),
+                "pA": round(float(pr["pA"]), 4),
+                "pO25": round(float(pr["pO25"]), 4),
+                "pU25": round(float(pr["pU25"]), 4),
+                "lam": round(float(pr["lam"]), 3), "mu": round(float(pr["mu"]), 3),
+                "rest_h": rh, "rest_a": ra,
+                "strength_diff": round(float(sdiff), 3),
+                "model_version": "dc-v2-cross",
+                "created_at": firestore.SERVER_TIMESTAMP,
+            }
+            doc = db.collection("predictions").document(str(fid))
+            snap = doc.get()
+            if not snap.exists:
+                rec["gerekce"] = gerekce_uret(rec, gemini_key)
+                doc.set(rec)
+                n_cl += 1
+            else:
+                old = snap.to_dict()
+                if abs(old.get("pH", 0) - rec["pH"]) > 0.03:
+                    doc.collection("updates").add(rec)
+    print(f"Turnuva (capraz-lig): {n_cl} yeni tahmin, {n_cl_skip} mac atlandi.")
+
+    # --- 2c) milli takim turnuvalari (Dunya Kupasi vb.): SAYISAL TAHMIN YOK,
+    #         sadece fikstur kaydi + Gemini on-analizi (seffaflik: model_version
+    #         'analysis-v1' ve tahmin alanlari bos -> arayuzde ayri gosterilir)
+    n_wc = 0
+    for comp in ANALYSIS_COMPS:
+        data = fdo_get(f"/competitions/{comp}/matches", {
+            "dateFrom": str(today.date()),
+            "dateTo": str((today + pd.Timedelta(days=HORIZON_DAYS)).date())},
+            fdo_key)
+        comp_name = data.get("competition", {}).get("name", comp)
+        for fx in data.get("matches", []):
+            if fx.get("status") in ("FINISHED", "POSTPONED", "CANCELLED"):
+                continue
+            fid = fx["id"]
+            h_src = fx["homeTeam"].get("shortName") or fx["homeTeam"]["name"]
+            a_src = fx["awayTeam"].get("shortName") or fx["awayTeam"]["name"]
+            if not h_src or not a_src or h_src == "TBD" or a_src == "TBD":
+                continue
+            doc = db.collection("predictions").document(str(fid))
+            if doc.get().exists:
+                continue
+            doc.set({
+                "fixture_id": fid, "league_comp": comp, "competition": comp,
+                "home": h_src, "away": a_src,
+                "home_src": h_src, "away_src": a_src,
+                "kickoff": fx["utcDate"],
+                "model_version": "analysis-v1",
+                "analiz": analiz_uret(h_src, a_src, comp_name,
+                                      fx["utcDate"], gemini_key),
+                "created_at": firestore.SERVER_TIMESTAMP,
+            })
+            n_wc += 1
+    print(f"Milli turnuvalar: {n_wc} yeni analiz kaydi yazildi.")
 
     # --- 3) biten maclarin sonuclarini isle (seffaf gecmis paneli)
     n_results = 0
