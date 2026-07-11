@@ -529,6 +529,9 @@ def main():
                 df = adapt_extra_schema(df)
                 if not df.empty:
                     df["Div"] = code  # Div sutununu ekle
+                    # RestH/RestA yoksa varsayilan 7 gun ata (NaN model egitimini bozar)
+                    df["RestH"] = 7.0
+                    df["RestA"] = 7.0
                     # matches veri cerceveisine ekle
                     matches = pd.concat([matches, df], ignore_index=True)
             except Exception as e:
