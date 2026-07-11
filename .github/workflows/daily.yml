@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Bagimliliklari kur
@@ -19,7 +19,6 @@ jobs:
       - name: Gunluk analiz isini calistir
         env:
           FOOTBALLDATA_KEY: ${{ secrets.FOOTBALLDATA_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         working-directory: pipeline
         run: python daily_job.py
