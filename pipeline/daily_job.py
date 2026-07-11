@@ -5,10 +5,11 @@ STRATIX - Gunluk Analiz Isi (Asama 1)
 Her sabah GitHub Actions uzerinde calisir:
   1. football-data.co.uk'den guncel tarihi veriyi indirir, modeli egitir
   2. football-data.org'dan onumuzdeki 7 gunun fikstürünü ceker
-     (8 lig + Sampiyonlar Ligi + milli takim turnuvalari)
+     (8 lig + Sampiyonlar Ligi)
   3. Her mac icin olasiliklari hesaplar (Dixon-Coles v2; turnuva maclari icin
-     lig-guc duzeltmeli capraz-lig surumu; milli takim maclari sadece analiz)
-  4. (Varsa) Gemini API ile 3 maddelik gerekce metni uretir
+     lig-guc duzeltmeli capraz-lig surumu)
+  4. Model ciktisindan 3 maddelik Turkce gerekce metni uretir (sablon tabanli,
+     deterministik; dis LLM servisi YOK -> limit/kesinti riski yok)
   5. Sonuclari Firestore'a yazar (DEGISTIRILEMEZ tahmin gunlugu mantigiyla:
      ayni mac icin kayit varsa uzerine yazilmaz, 'guncelleme' ayri belge olur)
   6. Biten maclarin sonuclarini isler (seffaf gecmis paneli icin)
@@ -16,7 +17,6 @@ Her sabah GitHub Actions uzerinde calisir:
 Gerekli ortam degiskenleri (GitHub Secrets):
   FIREBASE_SERVICE_ACCOUNT : Firebase servis hesabi JSON iceriginin tamami
   FOOTBALLDATA_KEY         : football-data.org API token'i (ucretsiz katman)
-  GEMINI_API_KEY           : (istege bagli) Google AI Studio anahtari
 """
 import json
 import os
@@ -47,8 +47,6 @@ LEAGUES = {                         # football-data.org lig kodu -> football-dat
 
 # Capraz-lig turnuvalari (takimlar farkli liglerden gelir)
 CROSS_COMPS = ["CL"]                # Sampiyonlar Ligi (ucretsiz katmanda)
-# Sadece analiz/anlati (sayisal model yok): milli takim turnuvalari
-ANALYSIS_COMPS = ["WC", "EC"]       # Dunya Kupasi, Avrupa Sampiyonasi
 
 # Lig guc duzeltmesi (log-gol olcegi; referans: Premier League = 0).
 # Kaba baslangic degerleri; CL sonuclari biriktikce elle guncellenebilir.
@@ -247,85 +245,65 @@ def match_team(src_name, fd_teams):
     return close[0] if close else None
 
 
-GEREKCE_PROMPT = """Sen STRATIX adli futbol istatistik uygulamasinin analiz yazarisin.
-Sana verilen SAYILARI ASLA degistirme, kendi olasilik uretme, bahis tesvik etme.
-Gorevin: asagidaki model ciktisini kullanicilar icin 3 maddelik kisa, notr ve
-dürüst bir gerekceye cevirmek. Her madde tek cumle olsun. Turkce yaz.
-Kumar tesviki yapma; 'kesin', 'garanti' gibi kelimeler kullanma.
+def gerekce_uret(rec):
+    """Model ciktisindan 3 maddelik Turkce gerekce uretir.
 
-Mac: {home} - {away} ({lig})
-Model ciktisi: Ev kazanma %{ph:.0f}, Beraberlik %{pd:.0f}, Deplasman %{pa:.0f},
-2.5 Ust %{po:.0f}. Beklenen goller: {lam:.2f} - {mu:.2f}.
-Ev sahibi dinlenme: {rest_h:.0f} gun, deplasman: {rest_a:.0f} gun."""
-
-
-ANALIZ_PROMPT = """Sen STRATIX adli futbol istatistik uygulamasinin analiz yazarisin.
-Bu mac icin ELIMIZDE SAYISAL MODEL TAHMINI YOK; kendi olasilik uydurma,
-yuzde/oran verme, bahis tesvik etme. 'kesin', 'garanti' gibi kelimeler kullanma.
-Gorevin: asagidaki turnuva maci icin 3 maddelik kisa, notr ve bilgilendirici
-bir on-analiz yazmak (takimlarin genel profili, turnuva baglami, dikkat
-cekici noktalar). Her madde tek cumle olsun. Turkce yaz.
-
-Turnuva: {lig}
-Mac: {home} - {away}
-Tarih (UTC): {kickoff}"""
-
-
-def analiz_uret(home, away, lig, kickoff, api_key):
-    """Sayisal tahmin olmayan maclar icin Gemini on-analizi (hata olursa bos).
-
-    429 (hiz limiti) gelirse 35 sn bekleyip bir kez daha dener; ayrica her
-    cagri arasinda kisa bekleme vardir (ucretsiz katman dakika limiti icin).
+    Sablon tabanli ve deterministiktir: dis LLM servisi kullanilmaz, bu yuzden
+    hiz limiti / kesinti / maliyet riski yoktur. Sayilar modelin kendi
+    ciktisidir; metin sadece bu sayilari anlatir ('model hesaplar' ilkesi).
+    Kumar tesviki icermez; 'kesin', 'garanti' gibi ifadeler kullanilmaz.
     """
-    if not api_key:
-        return ""
-    prompt = ANALIZ_PROMPT.format(home=home, away=away, lig=lig, kickoff=kickoff)
-    for deneme in range(2):
-        try:
-            time.sleep(5)
-            r = requests.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                "gemini-2.0-flash:generateContent",
-                params={"key": api_key},
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-                timeout=30)
-            if r.status_code == 429 and deneme == 0:
-                time.sleep(35)        # hiz limiti -> bekle, bir kez daha dene
-                continue
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as e:
-            print("Analiz uretilemedi:", e)
-            return ""
-    return ""
+    ph, pdr, pa = rec["pH"] * 100, rec["pD"] * 100, rec["pA"] * 100
+    po = rec["pO25"] * 100
+    home, away = rec["home"], rec["away"]
 
+    # 1) sonuc dagilimi
+    sirali = sorted([ph, pdr, pa], reverse=True)
+    if sirali[0] - sirali[1] < 5:
+        m1 = (f"Model olasılıkları birbirine yakın hesaplıyor "
+              f"({home} %{ph:.0f}, beraberlik %{pdr:.0f}, {away} %{pa:.0f}); "
+              f"net bir favori görünmüyor.")
+    else:
+        if ph == sirali[0]:
+            taraf = f"ev sahibi {home}"
+        elif pa == sirali[0]:
+            taraf = f"deplasman ekibi {away}"
+        else:
+            taraf = "beraberlik"
+        m1 = (f"Model en yüksek olasılığı {taraf} için hesaplıyor: "
+              f"{home} %{ph:.0f}, beraberlik %{pdr:.0f}, {away} %{pa:.0f}.")
 
-def gerekce_uret(rec, api_key):
-    """Gemini ile 3 maddelik gerekce. Hata olursa bos dondurur (is durmaz)."""
-    if not api_key:
-        return ""
-    prompt = GEREKCE_PROMPT.format(
-        home=rec["home"], away=rec["away"], lig=rec["league_fd"],
-        ph=rec["pH"] * 100, pd=rec["pD"] * 100, pa=rec["pA"] * 100,
-        po=rec["pO25"] * 100, lam=rec["lam"], mu=rec["mu"],
-        rest_h=rec.get("rest_h", 7), rest_a=rec.get("rest_a", 7))
-    try:
-        r = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-2.0-flash:generateContent",
-            params={"key": api_key},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            timeout=30)
-        r.raise_for_status()
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as e:
-        print("Gerekce uretilemedi:", e)
-        return ""
+    # 2) gol beklentisi
+    if po >= 60:
+        egilim = "gollü bir maç ihtimali öne çıkıyor"
+    elif po <= 40:
+        egilim = "düşük skorlu bir maç ihtimali öne çıkıyor"
+    else:
+        egilim = "gol beklentisi dengeli görünüyor"
+    m2 = (f"Beklenen gol sayıları {rec['lam']:.1f} - {rec['mu']:.1f}; "
+          f"2,5 üstü olasılığı %{po:.0f}, yani {egilim}.")
+
+    # 3) dinlenme / form durumu
+    rh, ra = rec.get("rest_h", 7), rec.get("rest_a", 7)
+    fark = rh - ra
+    if min(rh, ra) > 20:
+        m3 = ("İki takım da uzun bir aradan sonra sahaya çıkıyor; "
+              "form durumu her zamankinden daha belirsiz olabilir.")
+    elif fark >= 3:
+        m3 = (f"{home} rakibinden {fark:.0f} gün daha fazla dinlenmiş durumda; "
+              f"bu küçük bir avantaj olabilir.")
+    elif fark <= -3:
+        m3 = (f"{away} rakibinden {-fark:.0f} gün daha fazla dinlenmiş durumda; "
+              f"bu küçük bir avantaj olabilir.")
+    else:
+        m3 = (f"İki takım da benzer dinlenme süresiyle sahaya çıkıyor "
+              f"({rh:.0f} ve {ra:.0f} gün); yorgunluk farkı belirleyici görünmüyor.")
+
+    return "• " + m1 + "\n• " + m2 + "\n• " + m3
 
 
 def main():
     fdo_key = os.environ.get("FOOTBALLDATA_KEY")
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
     sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
     if not fdo_key or not sa_json:
         sys.exit("HATA: FOOTBALLDATA_KEY ve FIREBASE_SERVICE_ACCOUNT zorunlu.")
@@ -403,7 +381,7 @@ def main():
             doc = db.collection("predictions").document(str(fid))
             snap = doc.get()
             if not snap.exists:
-                rec["gerekce"] = gerekce_uret(rec, gemini_key)
+                rec["gerekce"] = gerekce_uret(rec)
                 doc.set(rec)
                 n_written += 1
             else:
@@ -465,7 +443,7 @@ def main():
             doc = db.collection("predictions").document(str(fid))
             snap = doc.get()
             if not snap.exists:
-                rec["gerekce"] = gerekce_uret(rec, gemini_key)
+                rec["gerekce"] = gerekce_uret(rec)
                 doc.set(rec)
                 n_cl += 1
             else:
@@ -473,49 +451,6 @@ def main():
                 if abs(old.get("pH", 0) - rec["pH"]) > 0.03:
                     doc.collection("updates").add(rec)
     print(f"Turnuva (capraz-lig): {n_cl} yeni tahmin, {n_cl_skip} mac atlandi.")
-
-    # --- 2c) milli takim turnuvalari (Dunya Kupasi vb.): SAYISAL TAHMIN YOK,
-    #         sadece fikstur kaydi + Gemini on-analizi (seffaflik: model_version
-    #         'analysis-v1' ve tahmin alanlari bos -> arayuzde ayri gosterilir)
-    n_wc = 0
-    for comp in ANALYSIS_COMPS:
-        data = fdo_get(f"/competitions/{comp}/matches", {
-            "dateFrom": str(today.date()),
-            "dateTo": str((today + pd.Timedelta(days=HORIZON_DAYS)).date())},
-            fdo_key)
-        comp_name = data.get("competition", {}).get("name", comp)
-        for fx in data.get("matches", []):
-            if fx.get("status") in ("FINISHED", "POSTPONED", "CANCELLED"):
-                continue
-            fid = fx["id"]
-            h_src = fx["homeTeam"].get("shortName") or fx["homeTeam"]["name"]
-            a_src = fx["awayTeam"].get("shortName") or fx["awayTeam"]["name"]
-            if not h_src or not a_src or h_src == "TBD" or a_src == "TBD":
-                continue
-            doc = db.collection("predictions").document(str(fid))
-            snap = doc.get()
-            if snap.exists:
-                # kayit var ama analiz bos kalmissa (or. Gemini limiti),
-                # sadece analiz alanini doldur
-                if not snap.to_dict().get("analiz"):
-                    yeni = analiz_uret(h_src, a_src, comp_name,
-                                       fx["utcDate"], gemini_key)
-                    if yeni:
-                        doc.update({"analiz": yeni})
-                        n_wc += 1
-                continue
-            doc.set({
-                "fixture_id": fid, "league_comp": comp, "competition": comp,
-                "home": h_src, "away": a_src,
-                "home_src": h_src, "away_src": a_src,
-                "kickoff": fx["utcDate"],
-                "model_version": "analysis-v1",
-                "analiz": analiz_uret(h_src, a_src, comp_name,
-                                      fx["utcDate"], gemini_key),
-                "created_at": firestore.SERVER_TIMESTAMP,
-            })
-            n_wc += 1
-    print(f"Milli turnuvalar: {n_wc} yeni analiz kaydi yazildi.")
 
     # --- 3) biten maclarin sonuclarini isle (seffaf gecmis paneli)
     n_results = 0
