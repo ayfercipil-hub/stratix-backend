@@ -3,9 +3,9 @@
 STRATIX - Gunluk Analiz Isi (Asama 1)
 =====================================
 Her sabah GitHub Actions uzerinde calisir:
-  1. football-data.co.uk'den guncel tarihi veriyi indirir, modeli egitir
-  2. football-data.org'dan onumuzdeki 7 gunun fikstürünü ceker
-     (8 lig + Sampiyonlar Ligi)
+  1. football-data.co.uk'den guncel tarihi veriyi indirir (20 lig: 8 orijinal + 12 yeni), modeli egitir
+  2. football-data.org'dan onumuzdeki 7 gunun fikstürünü ceker (orijinal 8 lig + Sampiyonlar Ligi)
+     football-data.co.uk'den yeni 12 ligin fikstürlerini ceker
   3. Her mac icin olasiliklari hesaplar (Dixon-Coles v2; turnuva maclari icin
      lig-guc duzeltmeli capraz-lig surumu)
   4. Model ciktisindan 3 maddelik Turkce gerekce metni uretir (sablon tabanli,
@@ -45,6 +45,27 @@ LEAGUES = {                         # football-data.org lig kodu -> football-dat
     "ELC": "E1",    # Championship (Ingiltere 2)- ucretsiz katmanda
 }
 
+# Yeni liglar: football-data.co.uk'dan bagisiz (fdo'da yok)
+# Grup A: mmz4281/{season}/{div}.csv semasi
+LEAGUES_MAIN_SCHEMA = {
+    "B1": "Belcika Pro League",
+    "SC0": "Iskocya Premiership",
+    "G1": "Yunanistan Super League",
+    "T1": "Turkiye Super Lig",
+}
+
+# Grup B: new/{code}.csv semasi (tum sezonlar tek dosya)
+LEAGUES_EXTRA_SCHEMA = {
+    "SWZ": "Switzerland",
+    "AUT": "Austria",
+    "NOR": "Norway",
+    "SWE": "Sweden",
+    "IRL": "Ireland",
+    "FIN": "Finland",
+    "ROU": "Romania",
+    "RUS": "Russia",
+}
+
 # Capraz-lig turnuvalari (takimlar farkli liglerden gelir)
 CROSS_COMPS = ["CL"]                # Sampiyonlar Ligi (ucretsiz katmanda)
 
@@ -53,6 +74,10 @@ CROSS_COMPS = ["CL"]                # Sampiyonlar Ligi (ucretsiz katmanda)
 LEAGUE_STRENGTH = {
     "E0": 0.00, "SP1": -0.05, "D1": -0.08, "I1": -0.08,
     "F1": -0.15, "P1": -0.22, "N1": -0.25, "E1": -0.55,
+    # Yeni liglar
+    "T1": -0.30, "B1": -0.30, "SC0": -0.45, "G1": -0.45,
+    "AUT": -0.45, "SWZ": -0.45, "RUS": -0.40,
+    "NOR": -0.55, "SWE": -0.60, "ROU": -0.60, "IRL": -0.70, "FIN": -0.70,
 }
 FD_BASE = "https://www.football-data.co.uk/mmz4281"
 FDO_BASE = "https://api.football-data.org/v4"
@@ -147,6 +172,33 @@ TEAM_MAP = {
     "CF Estrela da Amadora": "Estrela",
     # --- Championship (E1)
     "West Bromwich Albion": "West Brom", "West Brom": "West Brom",
+    # --- Yeni liglar (CL icin kullanilacak isim eslemeleri)
+    # Turkiye (T1)
+    "Galatasaray": "Galatasaray", "Fenerbahce": "Fenerbahce",
+    "Besiktas": "Besiktas", "Trabzonspor": "Trabzonspor",
+    # Iskocya (SC0)
+    "Celtic": "Celtic", "Rangers": "Rangers",
+    # Belcika (B1)
+    "Club Brugge": "Brugge", "Union Saint-Gilloise": "Union SG",
+    "RSC Anderlecht": "Anderlecht", "KRC Genk": "Genk",
+    # Yunanistan (G1)
+    "Olympiacos": "Olympiacos", "PAOK": "PAOK", "Panathinaikos": "Panathinaikos",
+    # Avusturya (AUT)
+    "Red Bull Salzburg": "Salzburg", "Sturm Graz": "Sturm Graz",
+    # Isvicre (SWZ)
+    "FC Zurich": "Zurich", "Young Boys": "Young Boys",
+    "FC Basel": "Basel", "Servette": "Servette",
+    # Norvec (NOR)
+    "Bodo/Glimt": "Bodo Glimt", "Molde": "Molde",
+    "Stromsgodset": "Stromsgodset", "Rosenborg": "Rosenborg",
+    # Isvec (SWE)
+    "Malmo": "Malmo", "Djurgarden": "Djurgarden",
+    # Romanya (ROU)
+    "FCSB": "FCSB", "CFR Cluj": "Cluj", "Steaua Bucuresti": "Steaua",
+    # Rusya (RUS)
+    "Zenit": "Zenit", "Lokomotiv Moscow": "Lokomotiv",
+    # Irlanda (IRL)
+    "Shamrock Rovers": "Shamrock Rovers",
     "Queens Park Rangers": "QPR", "QPR": "QPR",
     "Sheffield Wednesday": "Sheffield Weds", "Sheffield Wed": "Sheffield Weds",
     "Preston North End": "Preston", "Preston": "Preston",
@@ -181,6 +233,13 @@ def normalize(name):
     return " ".join(n.replace("  ", " ").split())
 
 
+def slugify(name):
+    """Takım adını URL-safe hale getir: küçükle, alfanumerik + - tutar."""
+    s = name.lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")
+
+
 def season_codes(today):
     """Aktif + gecmis sezon kodlari (orn. Temmuz 2026 -> ['2223',...,'2526'])."""
     # Avrupa sezonu Agustos'ta baslar; Haziran/Temmuz'da onceki sezon 'aktif'tir
@@ -196,6 +255,8 @@ def download_history(tmpdir="fd_data"):
     os.makedirs(tmpdir, exist_ok=True)
     today = datetime.now(timezone.utc)
     paths = []
+
+    # Orijinal liglar: sezonlara gore
     for s in season_codes(today):
         for code in LEAGUES.values():
             url = f"{FD_BASE}/{s}/{code}.csv"
@@ -207,8 +268,64 @@ def download_history(tmpdir="fd_data"):
                     paths.append(p)
             except requests.RequestException as e:
                 print(f"UYARI: {url} indirilemedi: {e}")
+
+    # Grup A: Ana semasi liglar (sezonlara gore)
+    for s in season_codes(today):
+        for code in LEAGUES_MAIN_SCHEMA.keys():
+            url = f"{FD_BASE}/{s}/{code}.csv"
+            p = os.path.join(tmpdir, f"{code}_{s}.csv")
+            try:
+                r = requests.get(url, timeout=30)
+                if r.status_code == 200 and len(r.content) > 1000:
+                    open(p, "wb").write(r.content)
+                    paths.append(p)
+            except requests.RequestException as e:
+                print(f"UYARI: {url} indirilemedi: {e}")
+
+    # Grup B: Ekstra semasi liglar (tek dosya, tum sezonlar)
+    for code in LEAGUES_EXTRA_SCHEMA.keys():
+        url = f"{FD_BASE}/new/{code}.csv"
+        p = os.path.join(tmpdir, f"{code}_extra.csv")
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code == 200 and len(r.content) > 1000:
+                open(p, "wb").write(r.content)
+                paths.append(p)
+        except requests.RequestException as e:
+            print(f"UYARI: {url} indirilemedi: {e}")
+
     print(f"{len(paths)} tarihi veri dosyasi indirildi.")
     return paths
+
+
+def adapt_extra_schema(df):
+    """Ekstra semasi CSV'sini ana semasi'na uyarla.
+    Kolon adlari: Home->HomeTeam, Away->AwayTeam, HG->FTHG, AG->FTAG
+    Tarih degeri son 5 yildan geri getirilir, eksik skorlar cikarirlir.
+    """
+    if "Home" not in df.columns:
+        return df
+    d = df.copy()
+    # Kolonu yeniden adlandir
+    if "Home" in d.columns:
+        d.rename(columns={"Home": "HomeTeam"}, inplace=True)
+    if "Away" in d.columns:
+        d.rename(columns={"Away": "AwayTeam"}, inplace=True)
+    if "HG" in d.columns:
+        d.rename(columns={"HG": "FTHG"}, inplace=True)
+    if "AG" in d.columns:
+        d.rename(columns={"AG": "FTAG"}, inplace=True)
+    # Tarih dilimi: son 5 yil
+    cutoff = datetime.now(timezone.utc) - timedelta(days=5*365)
+    if "Date" in d.columns:
+        try:
+            d["Date"] = pd.to_datetime(d["Date"], dayfirst=True, format="mixed", errors="coerce")
+            d = d[d["Date"] >= cutoff]
+        except Exception:
+            pass
+    # Eksik skorlar
+    d = d.dropna(subset=["HomeTeam", "AwayTeam", "FTHG", "FTAG"])
+    return d
 
 
 _last_call = [0.0]
@@ -231,6 +348,69 @@ def fdo_get(path, params, key):
         print(f"football-data.org hata ({path}): {r.status_code} {r.text[:200]}")
         return {}
     return r.json()
+
+
+def download_fixtures_main_schema(tmpdir="fd_data"):
+    """Grup A liglar icin: https://www.football-data.co.uk/fixtures.csv
+    Div, Date, Time, HomeTeam, AwayTeam, ... (artı oran kolonları)
+    Div in {B1,SC0,G1,T1} olanları döndür."""
+    os.makedirs(tmpdir, exist_ok=True)
+    url = f"{FD_BASE}/fixtures.csv"
+    p = os.path.join(tmpdir, "fixtures_main.csv")
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code == 200 and len(r.content) > 100:
+            open(p, "wb").write(r.content)
+            df = pd.read_csv(p, encoding="utf-8-sig", on_bad_lines="skip")
+            df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+            if "Div" in df.columns and "Date" in df.columns:
+                # Tarih filtreleme: bugünden 7 gün ileri
+                today = pd.Timestamp(datetime.now(timezone.utc).date())
+                cutoff = today + pd.Timedelta(days=HORIZON_DAYS)
+                try:
+                    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, format="mixed", errors="coerce")
+                    df = df[(df["Date"] >= today) & (df["Date"] <= cutoff)]
+                except Exception:
+                    pass
+                df = df[df["Div"].isin(list(LEAGUES_MAIN_SCHEMA.keys()))]
+                return df
+    except requests.RequestException as e:
+        print(f"UYARI: {url} indirilemedi: {e}")
+    return pd.DataFrame()
+
+
+def download_fixtures_extra_schema(tmpdir="fd_data"):
+    """Grup B liglar icin: https://www.football-data.co.uk/new_league_fixtures.csv
+    Country, League, Date, Time, Home, Away, ... (artı oran kolonları)
+    Country kodu maplanır: Switzerland->SWZ, Austria->AUT, ... vb."""
+    os.makedirs(tmpdir, exist_ok=True)
+    url = f"{FD_BASE}/new_league_fixtures.csv"
+    p = os.path.join(tmpdir, "fixtures_extra.csv")
+    country_map = {v: k for k, v in LEAGUES_EXTRA_SCHEMA.items()}
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code == 200 and len(r.content) > 100:
+            open(p, "wb").write(r.content)
+            df = pd.read_csv(p, encoding="utf-8-sig", on_bad_lines="skip")
+            df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+            if "Country" in df.columns and "Date" in df.columns:
+                # Tarih filtreleme
+                today = pd.Timestamp(datetime.now(timezone.utc).date())
+                cutoff = today + pd.Timedelta(days=HORIZON_DAYS)
+                try:
+                    df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, format="mixed", errors="coerce")
+                    df = df[(df["Date"] >= today) & (df["Date"] <= cutoff)]
+                except Exception:
+                    pass
+                # Country'yi Div koduna map et
+                df["Div"] = df["Country"].map(country_map)
+                df = df[df["Div"].notna()]
+                # Home->HomeTeam, Away->AwayTeam (load_matches format'ina uyumlu ama
+                # burada fixtures oldugu icin, ozel isleme ihtiyac yok)
+                return df
+    except requests.RequestException as e:
+        print(f"UYARI: {url} indirilemedi: {e}")
+    return pd.DataFrame()
 
 
 def match_team(src_name, fd_teams):
@@ -320,7 +500,10 @@ def main():
     matches = load_matches(paths)
     today = pd.Timestamp(datetime.now(timezone.utc).date())
     models, rest_info = {}, {}
-    for code in set(LEAGUES.values()):
+
+    # Orijinal liglar + Grup A (ana semasi)
+    all_div_codes = set(LEAGUES.values()) | set(LEAGUES_MAIN_SCHEMA.keys())
+    for code in all_div_codes:
         dd = matches[matches["Div"] == code]
         m = DixonColes()
         if m.fit(dd, as_of_date=today + pd.Timedelta(days=1)):
@@ -331,6 +514,36 @@ def main():
             last[r["HomeTeam"]] = r["Date"]
             last[r["AwayTeam"]] = r["Date"]
         rest_info[code] = last
+
+    # Grup B: Ekstra semasi dosyalari elle islenmeli (sezonlara gore parcalandi, Div eklenmemis)
+    tmpdir = "fd_data"
+    for code in LEAGUES_EXTRA_SCHEMA.keys():
+        p = os.path.join(tmpdir, f"{code}_extra.csv")
+        if os.path.exists(p):
+            try:
+                df = pd.read_csv(p, encoding="utf-8-sig", on_bad_lines="skip")
+                df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+                df = adapt_extra_schema(df)
+                if not df.empty:
+                    df["Div"] = code  # Div sutununu ekle
+                    # matches veri cerceveisine ekle
+                    matches = pd.concat([matches, df], ignore_index=True)
+            except Exception as e:
+                print(f"UYARI: {code} ekstra semasi islenmedi: {e}")
+
+    # Grup B modelleri egit
+    for code in LEAGUES_EXTRA_SCHEMA.keys():
+        dd = matches[matches["Div"] == code]
+        if not dd.empty:
+            m = DixonColes()
+            if m.fit(dd, as_of_date=today + pd.Timedelta(days=1)):
+                models[code] = m
+            last = {}
+            for _, r in dd.iterrows():
+                last[r["HomeTeam"]] = r["Date"]
+                last[r["AwayTeam"]] = r["Date"]
+            rest_info[code] = last
+
     print(f"{len(models)} lig icin model egitildi.")
 
     # --- 2) fikstur cek ve tahmin uret
@@ -390,10 +603,169 @@ def main():
                     doc.collection("updates").add(rec)
     print(f"{n_written} yeni tahmin yazildi, {n_skipped} mac atlandi.")
 
+    # --- 2a) Yeni liglar: football-data.co.uk fikstürleri (Grup A + Grup B)
+    n_new_written = n_new_skipped = n_atlandi = 0
+
+    # Grup A: Ana semasi fikstürleri
+    fx_main = download_fixtures_main_schema()
+    for _, fx in fx_main.iterrows():
+        code = fx.get("Div")
+        if code not in models:
+            continue
+        home = fx.get("HomeTeam", "")
+        away = fx.get("AwayTeam", "")
+        date_str = fx.get("Date", "")
+        time_str = fx.get("Time", "")
+        if not (home and away and date_str):
+            n_atlandi += 1
+            continue
+
+        fd_teams = set(models[code].teams)
+        # Isim eslemesi: tam match gerekli (football-data.co.uk ile ayni kaynak)
+        if home not in fd_teams or away not in fd_teams:
+            print(f"{code}: Takimlar bilinmiyor, atlandi: {home} vs {away}")
+            n_new_skipped += 1
+            n_atlandi += 1
+            continue
+
+        # Fixture ID: fdcuk-{lig}-{YYYYMMDD}-{home_slug}-{away_slug}
+        try:
+            dt = pd.Timestamp(date_str)
+            date_ymd = dt.strftime("%Y%m%d")
+        except Exception:
+            n_atlandi += 1
+            continue
+
+        fixture_id = f"fdcuk-{code}-{date_ymd}-{slugify(home)}-{slugify(away)}"
+
+        # UTC tarihi (UK saati varsayıp UTC'ye çevir)
+        # kickoff mutlaka saat dilimli (UTC) yazilir; yoksa sonuc isleme
+        # bolumundeki tz_convert cagrisi hata verir
+        kick = dt
+        if time_str:
+            try:
+                time_obj = pd.Timestamp(str(time_str)).time()
+                kick = dt.replace(hour=time_obj.hour, minute=time_obj.minute)
+            except Exception:
+                pass
+        utc_date_str = kick.tz_localize("UTC").isoformat()
+
+        # Dinlenme günü hesapla
+        rh = (today - rest_info[code].get(home, today - pd.Timedelta(days=7))).days
+        ra = (today - rest_info[code].get(away, today - pd.Timedelta(days=7))).days
+        pr = models[code].predict(home, away, rest_h=rh, rest_a=ra)
+        if pr is None:
+            n_new_skipped += 1
+            n_atlandi += 1
+            continue
+
+        rec = {
+            "fixture_id": fixture_id, "league_fd": code, "league_comp": code,
+            "home": home, "away": away, "home_src": home, "away_src": away,
+            "kickoff": utc_date_str,
+            "pH": round(float(pr["pH"]), 4), "pD": round(float(pr["pD"]), 4),
+            "pA": round(float(pr["pA"]), 4),
+            "pO25": round(float(pr["pO25"]), 4), "pU25": round(float(pr["pU25"]), 4),
+            "lam": round(float(pr["lam"]), 3), "mu": round(float(pr["mu"]), 3),
+            "rest_h": rh, "rest_a": ra,
+            "model_version": "dc-v2",
+            "created_at": firestore.SERVER_TIMESTAMP,
+        }
+        doc = db.collection("predictions").document(fixture_id)
+        snap = doc.get()
+        if not snap.exists:
+            rec["gerekce"] = gerekce_uret(rec)
+            doc.set(rec)
+            n_new_written += 1
+        else:
+            old = snap.to_dict()
+            if abs(old.get("pH", 0) - rec["pH"]) > 0.03:
+                doc.collection("updates").add(rec)
+
+    print(f"Grup A (ana semasi): {n_new_written} yeni tahmin, {n_new_skipped} mac atlandi, {n_atlandi} veri sorunu.")
+
+    # Grup B: Ekstra semasi fikstürleri
+    n_extra_written = n_extra_skipped = n_extra_atlandi = 0
+    fx_extra = download_fixtures_extra_schema()
+    for _, fx in fx_extra.iterrows():
+        code = fx.get("Div")
+        if code not in models:
+            continue
+        home = fx.get("Home", "")
+        away = fx.get("Away", "")
+        date_str = fx.get("Date", "")
+        time_str = fx.get("Time", "")
+        if not (home and away and date_str):
+            n_extra_atlandi += 1
+            continue
+
+        fd_teams = set(models[code].teams)
+        if home not in fd_teams or away not in fd_teams:
+            print(f"{code} (Grup B): Takimlar bilinmiyor, atlandi: {home} vs {away}")
+            n_extra_skipped += 1
+            n_extra_atlandi += 1
+            continue
+
+        try:
+            dt = pd.Timestamp(date_str)
+            date_ymd = dt.strftime("%Y%m%d")
+        except Exception:
+            n_extra_atlandi += 1
+            continue
+
+        fixture_id = f"fdcuk-{code}-{date_ymd}-{slugify(home)}-{slugify(away)}"
+        # kickoff mutlaka saat dilimli (UTC) yazilir; yoksa sonuc isleme
+        # bolumundeki tz_convert cagrisi hata verir
+        kick = dt
+        if time_str:
+            try:
+                time_obj = pd.Timestamp(str(time_str)).time()
+                kick = dt.replace(hour=time_obj.hour, minute=time_obj.minute)
+            except Exception:
+                pass
+        utc_date_str = kick.tz_localize("UTC").isoformat()
+
+        rh = (today - rest_info[code].get(home, today - pd.Timedelta(days=7))).days
+        ra = (today - rest_info[code].get(away, today - pd.Timedelta(days=7))).days
+        pr = models[code].predict(home, away, rest_h=rh, rest_a=ra)
+        if pr is None:
+            n_extra_skipped += 1
+            n_extra_atlandi += 1
+            continue
+
+        rec = {
+            "fixture_id": fixture_id, "league_fd": code, "league_comp": code,
+            "home": home, "away": away, "home_src": home, "away_src": away,
+            "kickoff": utc_date_str,
+            "pH": round(float(pr["pH"]), 4), "pD": round(float(pr["pD"]), 4),
+            "pA": round(float(pr["pA"]), 4),
+            "pO25": round(float(pr["pO25"]), 4), "pU25": round(float(pr["pU25"]), 4),
+            "lam": round(float(pr["lam"]), 3), "mu": round(float(pr["mu"]), 3),
+            "rest_h": rh, "rest_a": ra,
+            "model_version": "dc-v2",
+            "created_at": firestore.SERVER_TIMESTAMP,
+        }
+        doc = db.collection("predictions").document(fixture_id)
+        snap = doc.get()
+        if not snap.exists:
+            rec["gerekce"] = gerekce_uret(rec)
+            doc.set(rec)
+            n_extra_written += 1
+        else:
+            old = snap.to_dict()
+            if abs(old.get("pH", 0) - rec["pH"]) > 0.03:
+                doc.collection("updates").add(rec)
+
+    print(f"Grup B (ekstra semasi): {n_extra_written} yeni tahmin, {n_extra_skipped} mac atlandi, {n_extra_atlandi} veri sorunu.")
+
     # --- 2b) capraz-lig turnuvalari (Sampiyonlar Ligi): lig-guc duzeltmeli tahmin
+    # Orijinal liglar + yeni liglar
+    all_models_for_cl = {**{code: models[code] for code in set(LEAGUES.values()) if code in models},
+                         **{code: models[code] for code in set(LEAGUES_MAIN_SCHEMA.keys()) | set(LEAGUES_EXTRA_SCHEMA.keys()) if code in models}}
+
     def find_team(src_name):
         """Takimi tum lig modellerinde arar -> (lig_kodu, fd_adi) veya None."""
-        for code_, m_ in models.items():
+        for code_, m_ in all_models_for_cl.items():
             t_ = match_team(src_name, set(m_.teams))
             if t_:
                 return code_, t_
@@ -420,7 +792,7 @@ def main():
             sdiff = LEAGUE_STRENGTH.get(div_h, -0.2) - LEAGUE_STRENGTH.get(div_a, -0.2)
             rh = (today - rest_info[div_h].get(h, today - pd.Timedelta(days=7))).days
             ra = (today - rest_info[div_a].get(a, today - pd.Timedelta(days=7))).days
-            pr = predict_cross_league(models[div_h], h, models[div_a], a,
+            pr = predict_cross_league(all_models_for_cl[div_h], h, all_models_for_cl[div_a], a,
                                       strength_diff=sdiff, rest_h=rh, rest_a=ra)
             if pr is None:
                 n_cl_skip += 1
@@ -454,6 +826,42 @@ def main():
 
     # --- 3) biten maclarin sonuclarini isle (seffaf gecmis paneli)
     n_results = 0
+
+    # Yeni liglerin sonuclari, bolum 1'de zaten indirilen yerel CSV'lerden okunur.
+    # Lig basina bir kez okunur ve bellekte tutulur (tekrar indirme yok).
+    _sonuc_cache = {}
+
+    def yeni_lig_sonuc_df(code):
+        if code in _sonuc_cache:
+            return _sonuc_cache[code]
+        df = None
+        try:
+            if code in LEAGUES_MAIN_SCHEMA:
+                s = season_codes(today)[-1]  # guncel sezon
+                p = os.path.join("fd_data", f"{code}_{s}.csv")
+                if os.path.exists(p):
+                    df = pd.read_csv(p, encoding="utf-8-sig", on_bad_lines="skip")
+                    df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+            elif code in LEAGUES_EXTRA_SCHEMA:
+                p = os.path.join("fd_data", f"{code}_extra.csv")
+                if os.path.exists(p):
+                    df = pd.read_csv(p, encoding="utf-8-sig", on_bad_lines="skip")
+                    df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+                    df = adapt_extra_schema(df)
+            if df is not None:
+                if {"HomeTeam", "AwayTeam", "FTHG", "FTAG", "Date"} <= set(df.columns):
+                    if not pd.api.types.is_datetime64_any_dtype(df["Date"]):
+                        df["Date"] = pd.to_datetime(df["Date"], dayfirst=True,
+                                                    format="mixed", errors="coerce")
+                    df = df.dropna(subset=["FTHG", "FTAG", "Date"])
+                else:
+                    df = None
+        except Exception as e:
+            print(f"UYARI: {code} sonuc dosyasi okunamadi: {e}")
+            df = None
+        _sonuc_cache[code] = df
+        return df
+
     # son 10 gunun tahminlerini tara, sonucu islenmemis bitmis maclari guncelle
     cutoff = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
     for snap in db.collection("predictions").where("kickoff", ">=", cutoff).stream():
@@ -462,14 +870,42 @@ def main():
             continue
         if pd.Timestamp(d["kickoff"]).tz_convert("UTC") > pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=3):
             continue  # henuz bitmemis olabilir
-        fx = fdo_get(f"/matches/{d['fixture_id']}", {}, fdo_key)
-        fx = fx.get("match", fx)  # v4 bazen dogrudan, bazen sarmalanmis doner
-        if fx and fx.get("status") == "FINISHED":
-            g = fx["score"]["fullTime"]
-            snap.reference.update({
-                "result": {"FTHG": g["home"], "FTAG": g["away"]},
-                "result_processed_at": firestore.SERVER_TIMESTAMP})
-            n_results += 1
+
+        fixture_id = d.get("fixture_id")
+
+        # fdcuk- ile baslayan kayitlar (yeni ligler): sonuc yerel CSV'den bulunur
+        if fixture_id and str(fixture_id).startswith("fdcuk-"):
+            # ID bicimi: fdcuk-{lig}-{YYYYMMDD}-{ev}-{deplasman}
+            parts = str(fixture_id).split("-")
+            if len(parts) >= 3:
+                code, date_ymd = parts[1], parts[2]
+                df = yeni_lig_sonuc_df(code)
+                if df is not None:
+                    try:
+                        mac_tarihi = pd.Timestamp(date_ymd)
+                        # Ayni sezonda iki kez karsilasan takimlari karistirmamak
+                        # icin tarih de eslesmek zorunda
+                        eslesen = df[(df["HomeTeam"] == d.get("home")) &
+                                     (df["AwayTeam"] == d.get("away")) &
+                                     (df["Date"] == mac_tarihi)]
+                        if not eslesen.empty:
+                            m = eslesen.iloc[0]
+                            snap.reference.update({
+                                "result": {"FTHG": int(m["FTHG"]), "FTAG": int(m["FTAG"])},
+                                "result_processed_at": firestore.SERVER_TIMESTAMP})
+                            n_results += 1
+                    except Exception as e:
+                        print(f"UYARI: {fixture_id} sonuc eslesmesi basarisiz: {e}")
+        else:
+            # Orijinal fixture'lar (football-data.org)
+            fx = fdo_get(f"/matches/{fixture_id}", {}, fdo_key)
+            fx = fx.get("match", fx)  # v4 bazen dogrudan, bazen sarmalanmis doner
+            if fx and fx.get("status") == "FINISHED":
+                g = fx["score"]["fullTime"]
+                snap.reference.update({
+                    "result": {"FTHG": g["home"], "FTAG": g["away"]},
+                    "result_processed_at": firestore.SERVER_TIMESTAMP})
+                n_results += 1
     print(f"{n_results} mac sonucu islendi.")
 
 
