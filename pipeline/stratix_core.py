@@ -199,6 +199,53 @@ class DixonColes:
                 "lam": lam, "mu": mu}
 
 
+# ------------------------------------------------- capraz-lig (turnuva) tahmini
+def predict_cross_league(model_h, home, model_a, away, strength_diff=0.0,
+                         rest_h=7.0, rest_a=7.0):
+    """Iki FARKLI lig modelinden turnuva maci tahmini (orn. Sampiyonlar Ligi).
+
+    Mantik: her takimin atak/defans gucu kendi lig modelinden alinir; ligler
+    arasindaki seviye farki 'strength_diff' (ev sahibinin ligi - deplasmanin
+    ligi, log-gol olceginde) ile duzeltilir. Defans parametrelerinin lig ici
+    ortalamasi (gol taban seviyesi) once cikarilir, iki ligin ortalamasi
+    ortak taban olarak geri eklenir; boylece farkli liglerin gol ortalamalari
+    karismaz. Ev avantaji iki ligin ortalamasidir.
+    """
+    for m, t in ((model_h, home), (model_a, away)):
+        if m.params is None or t not in m._idx:
+            return None
+        if m._counts.get(t, 0) < MIN_MATCHES:
+            return None
+    nh, na = len(model_h.teams), len(model_a.teams)
+    atk_h = model_h.params[:nh] - model_h.params[:nh].mean()
+    dfn_h = model_h.params[nh:2 * nh]
+    atk_a = model_a.params[:na] - model_a.params[:na].mean()
+    dfn_a = model_a.params[na:2 * na]
+    base_h, base_a = dfn_h.mean(), dfn_a.mean()
+    base = 0.5 * (base_h + base_a)
+    home_adv = 0.5 * (model_h.params[-3] + model_a.params[-3])
+    rho = 0.5 * (model_h.params[-2] + model_a.params[-2])
+    brest = 0.5 * (model_h.params[-1] + model_a.params[-1])
+    i, j = model_h._idx[home], model_a._idx[away]
+    delta = (min(rest_h, 14) - min(rest_a, 14)) / 7.0
+    lam = np.exp(atk_h[i] + (dfn_a[j] - base_a) + base + home_adv
+                 + strength_diff + brest * delta)
+    mu = np.exp(atk_a[j] + (dfn_h[i] - base_h) + base
+                - strength_diff - brest * delta)
+    g = np.arange(MAX_GOALS + 1)
+    grid = np.outer(poisson.pmf(g, lam), poisson.pmf(g, mu))
+    for hg_ in (0, 1):
+        for ag_ in (0, 1):
+            grid[hg_, ag_] *= _tau(hg_, ag_, lam, mu, rho)
+    grid /= grid.sum()
+    totals = np.add.outer(g, g)
+    p_over = grid[totals >= 3].sum()
+    return {"pH": np.tril(grid, -1).sum(), "pD": np.trace(grid),
+            "pA": np.triu(grid, 1).sum(),
+            "pO25": p_over, "pU25": 1 - p_over,
+            "lam": lam, "mu": mu}
+
+
 # ---------------------------------------------------------------- backtest
 def run_backtest(df, test_start, edge=EDGE_THRESHOLD, refit_days=REFIT_DAYS,
                  max_odds=8.0):
